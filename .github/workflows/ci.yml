@@ -96,7 +96,7 @@ jobs:
           K8S_EXPECTED_API_SERVER: ${{ vars.K8S_EXPECTED_API_SERVER }}
           K8S_EXPECTED_CA_SHA256: ${{ vars.K8S_EXPECTED_CA_SHA256 }}
           K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE }}
-          IMAGE_DIGEST: ${{ needs.build-and-push.outputs.image_digest }}
+          IMAGE_DIGEST: ${{ needs.build-and-push.outputs.image_tag }}
         run: |
           set -eu
           : "${K8S_EXPECTED_API_SERVER:?required}"; : "${K8S_EXPECTED_CA_SHA256:?required}"; : "${K8S_NAMESPACE:?required}"; : "${IMAGE_DIGEST:?required image tag}"
