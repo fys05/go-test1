@@ -18,6 +18,7 @@ IMAGE_NAME=$(jq -r '.image_name' "$CONFIG_FILE")
 TLS_SECRET=$(jq -r '.cluster.tls_secret' "$CONFIG_FILE")
 IMAGE_PULL_SECRET=$(jq -r '.cluster.image_pull_secret' "$CONFIG_FILE")
 DEPLOY_STRATEGY=$(jq -r '.deploy_strategy' "$CONFIG_FILE")
+INGRESS_CONTROLLER=$(jq -r '.ingress.controller' "$CONFIG_FILE")
 
 # Create k8s directory structure
 mkdir -p k8s/app
@@ -79,8 +80,61 @@ spec:
     app: \${APP_NAME}
 EOF
 
-# Generate ingress-http.yaml
-cat > k8s/app/ingress-http.yaml << EOF
+# Generate ingress based on controller type
+if [[ "$INGRESS_CONTROLLER" == "nginx" ]]; then
+    # NGINX Ingress Controller
+    cat > k8s/app/ingress-http.yaml << EOF
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: \${APP_NAME}-http
+  namespace: \${K8S_NAMESPACE}
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+spec:
+  rules:
+    - host: \${DOMAIN}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: \${APP_NAME}
+                port:
+                  number: 8080
+EOF
+
+    cat > k8s/app/ingress-https.yaml << EOF
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: \${APP_NAME}
+  namespace: \${K8S_NAMESPACE}
+  annotations:
+    kubernetes.io/ingress.class: nginx
+spec:
+  rules:
+    - host: \${DOMAIN}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: \${APP_NAME}
+                port:
+                  number: 8080
+  tls:
+    - hosts:
+        - \${DOMAIN}
+      secretName: \${TLS_SECRET}
+EOF
+else
+    # Traefik Ingress Controller (default)
+    cat > k8s/app/ingress-http.yaml << EOF
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -103,8 +157,7 @@ spec:
                   number: 8080
 EOF
 
-# Generate ingress-https.yaml
-cat > k8s/app/ingress-https.yaml << EOF
+    cat > k8s/app/ingress-https.yaml << EOF
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -130,5 +183,6 @@ spec:
         - \${DOMAIN}
       secretName: \${TLS_SECRET}
 EOF
+fi
 
 echo "Generated manifests in k8s/app/"

@@ -114,8 +114,6 @@ validate_cluster() {
         log_error "Namespace '$NAMESPACE' not found"
         exit 1
     fi
-    
-    log_info "Cluster connection validated"
 }
 
 # Extract cluster information
@@ -139,12 +137,8 @@ extract_cluster_info() {
         fi
     fi
     
-    # Traefik LB IP
-    TRAEFIK_IP=$(kubectl get svc traefik -n kube-system -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
-    if [[ -z "$TRAEFIK_IP" ]]; then
-        # Try alternative ingress controllers
-        TRAEFIK_IP=$(kubectl get svc -n kube-system -o jsonpath='{.items[?(@.spec.type=="LoadBalancer")].status.loadBalancer.ingress[0].ip}' 2>/dev/null | head -1 || echo "")
-    fi
+    # Detect ingress controller and get LB IP
+    detect_ingress_controller
     
     # TLS Secret from existing ingress
     TLS_SECRET=$(kubectl get ingress -n "$NAMESPACE" -o jsonpath='{.items[0].spec.tls[0].secretName}' 2>/dev/null || echo "")
@@ -156,11 +150,12 @@ extract_cluster_info() {
     # Image pull secret
     IMAGE_PULL_SECRET=$(kubectl get secrets -n "$NAMESPACE" --field-selector type=kubernetes.io/dockerconfigjson -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
     
-    # Ingress annotations pattern
+    # Ingress annotations pattern (learn from existing)
     INGRESS_ANNOTATIONS=$(kubectl get ingress -n "$NAMESPACE" -o jsonpath='{.items[0].metadata.annotations}' 2>/dev/null | jq -c '.' || echo "{}")
     
     log_info "Cluster information extracted"
 }
+
 
 # Validate GitHub repository
 validate_github() {
@@ -247,6 +242,7 @@ generate_config() {
     "version": "$GO_VERSION"
   },
   "ingress": {
+    "controller": "$INGRESS_CONTROLLER",
     "annotations": $INGRESS_ANNOTATIONS
   }
 }
