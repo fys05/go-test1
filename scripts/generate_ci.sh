@@ -1,0 +1,209 @@
+#!/bin/bash
+# generate_ci.sh - Generate GitHub Actions CI/CD workflow from preflight config
+
+set -euo pipefail
+
+CONFIG_FILE=${1:-/tmp/preflight-config.json}
+
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    echo "Error: Config file not found: $CONFIG_FILE"
+    exit 1
+fi
+
+# Read config
+GO_VERSION=$(jq -r '.go.version' "$CONFIG_FILE")
+REGISTRY=$(jq -r '.registry' "$CONFIG_FILE")
+DEPLOY_STRATEGY=$(jq -r '.deploy_strategy' "$CONFIG_FILE")
+SKIP_SMOKE_TEST=$(jq -r '.skip_smoke_test' "$CONFIG_FILE")
+
+# Create workflow directory
+mkdir -p .github/workflows
+
+# Determine deploy command based on strategy
+if [[ "$DEPLOY_STRATEGY" == "replace" ]]; then
+    DEPLOY_CMD="kubectl replace -f k8s/app/ --force"
+else
+    DEPLOY_CMD="kubectl apply -f k8s/app/"
+fi
+
+# Generate smoke test step if not skipped
+SMOKE_TEST_STEP=""
+if [[ "$SKIP_SMOKE_TEST" != "true" ]]; then
+    SMOKE_TEST_STEP=$(cat << 'SMOKE_EOF'
+      - name: Smoke test
+        env:
+          DOMAIN: ${{ vars.DOMAIN }}
+          INGRESS_ENDPOINT: ${{ vars.INGRESS_ENDPOINT }}
+        run: |
+          echo "Smoke test through probed endpoint for ${DOMAIN}"
+          for i in $(seq 1 6); do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" -k --connect-timeout 10 -H "Host:${DOMAIN}" "https://${INGRESS_ENDPOINT}/healthz")
+            echo "  attempt $i: HTTP $CODE"
+            if [ "$CODE" = "200" ] || [ "$CODE" = "302" ]; then
+              echo "SMOKE TEST PASSED (HTTP $CODE)"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "SMOKE TEST FAILED"
+          exit 1
+SMOKE_EOF
+)
+fi
+
+# Generate CI workflow
+cat > .github/workflows/ci.yml << EOF
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  GO_VERSION: "${GO_VERSION}"
+  REGISTRY: ${REGISTRY}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: \${{ env.GO_VERSION }}
+          cache: true
+      - name: go mod tidy
+        run: go mod tidy
+      - name: go vet
+        run: go vet ./...
+      - name: gofmt check
+        run: |
+          fmt_output=\$(gofmt -l . 2>&1)
+          if [ -n "\$fmt_output" ]; then
+            echo "Files not formatted:"
+            echo "\$fmt_output"
+            exit 1
+          fi
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: \${{ env.GO_VERSION }}
+          cache: true
+      - name: go mod tidy
+        run: go mod tidy
+      - name: Run tests
+        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+      - name: Coverage
+        run: go tool cover -func=coverage.out | tail -1
+
+  build-and-push:
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: \${{ steps.lc.outputs.image }}
+      image_tag: \${{ steps.lc.outputs.image }}:\${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: lc
+        run: echo "image=\$(echo '\${{ env.REGISTRY }}/\${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> \$GITHUB_OUTPUT
+      - uses: docker/login-action@v3
+        with:
+          registry: \${{ env.REGISTRY }}
+          username: \${{ github.actor }}
+          password: \${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: \${{ steps.lc.outputs.image }}:\${{ github.sha }}
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    concurrency:
+      group: production-\${{ vars.K8S_NAMESPACE }}-\${{ vars.APP_NAME }}-\${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: "v1.31.0"
+      - name: Preflight and build kubeconfig
+        env:
+          CERT: \${{ secrets.K8S_CLIENT_CERT }}
+          KEY: \${{ secrets.K8S_CLIENT_KEY }}
+          CA_B64: \${{ secrets.K8S_CA_CERT }}
+          HOST: \${{ vars.K8S_HOST }}
+          PORT: \${{ vars.K8S_PORT }}
+          K8S_EXPECTED_API_SERVER: \${{ vars.K8S_EXPECTED_API_SERVER }}
+          K8S_EXPECTED_CA_SHA256: \${{ vars.K8S_EXPECTED_CA_SHA256 }}
+          K8S_NAMESPACE: \${{ vars.K8S_NAMESPACE }}
+          IMAGE_DIGEST: \${{ needs.build-and-push.outputs.image_tag }}
+        run: |
+          set -eu
+          : "\${K8S_EXPECTED_API_SERVER:?required}"; : "\${K8S_EXPECTED_CA_SHA256:?required}"; : "\${K8S_NAMESPACE:?required}"; : "\${IMAGE_DIGEST:?required image tag}"
+          test "\${IMAGE_DIGEST#*:}" != "\${IMAGE_DIGEST}"
+          mkdir -p ~/.kube
+          echo "\$CERT" | base64 -d > /tmp/k8s-cert.pem
+          echo "\$KEY" | base64 -d > /tmp/k8s-key.pem
+          echo "\$CA_B64" | base64 -d > /tmp/k8s-ca.pem
+          openssl x509 -in /tmp/k8s-ca.pem -outform DER -out /tmp/k8s-ca.der
+          test "\$(sha256sum /tmp/k8s-ca.der | cut -d ' ' -f1)" = "\$K8S_EXPECTED_CA_SHA256"
+          kubectl config set-cluster k8s --server="https://\${HOST}:\${PORT}" --certificate-authority=/tmp/k8s-ca.pem --tls-server-name=kubernetes
+          kubectl config set-credentials admin --client-certificate=/tmp/k8s-cert.pem --client-key=/tmp/k8s-key.pem
+          kubectl config set-context production --cluster=k8s --user=admin --namespace="\${K8S_NAMESPACE}"
+          kubectl config use-context production
+          test "\$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')" = "\$K8S_EXPECTED_API_SERVER"
+          require_can_i() {
+            test "\$(kubectl auth can-i "\$@")" = "yes"
+          }
+          require_can_i get pods -n "\${K8S_NAMESPACE}"
+          require_can_i create deployments.apps -n "\${K8S_NAMESPACE}"
+          kubectl create configmap preflight-admission-check --from-literal=commit="\${{ github.sha }}" -n "\${K8S_NAMESPACE}" --dry-run=server -o yaml >/dev/null
+          jq -n --arg api "\$K8S_EXPECTED_API_SERVER" --arg ca "\$K8S_EXPECTED_CA_SHA256" --arg sha "\${{ github.sha }}" --arg ref "\${{ github.ref }}" --arg run "\$GITHUB_RUN_ID" '{status:"PASS",api_server:\$api,ca_sha256:\$ca,commit_sha:\$sha,ref:\$ref,run_id:\$run}' > preflight.json
+          jq -e --arg sha "\${{ github.sha }}" --arg ref "\${{ github.ref }}" --arg api "\$K8S_EXPECTED_API_SERVER" --arg ca "\$K8S_EXPECTED_CA_SHA256" '.status == "PASS" and .api_server == \$api and .ca_sha256 == \$ca and .commit_sha == \$sha and .ref == \$ref and (.run_id|tostring) == (env.GITHUB_RUN_ID|tostring)' preflight.json >/dev/null
+      - name: Deploy app
+        env:
+          NS: \${{ vars.K8S_NAMESPACE }}
+          IMG: \${{ needs.build-and-push.outputs.image_tag }}
+          APP: \${{ vars.APP_NAME }}
+          DOMAIN: \${{ vars.DOMAIN }}
+          TLS_SECRET: \${{ vars.TLS_SECRET }}
+          IMAGE_PULL_SECRET: \${{ vars.IMAGE_PULL_SECRET }}
+        run: |
+          set -eu
+          test "\${IMG#*:}" != "\${IMG}" && test -n "\${NS}" && test -n "\${APP}" && test -n "\${DOMAIN}"
+          sed -i "s|\${IMAGE_DIGEST}|\${IMG}|g" k8s/app/deployment.yaml
+          sed -i "s|\${K8S_NAMESPACE}|\${NS}|g" k8s/app/*.yaml
+          sed -i "s|\${APP_NAME}|\${APP}|g" k8s/app/*.yaml
+          sed -i "s|\${DOMAIN}|\${DOMAIN}|g" k8s/app/*.yaml
+          sed -i "s|\${TLS_SECRET}|\${TLS_SECRET}|g" k8s/app/*.yaml
+          sed -i "s|\${IMAGE_PULL_SECRET}|\${IMAGE_PULL_SECRET}|g" k8s/app/*.yaml
+          kubectl diff -f k8s/app/ || true
+          ${DEPLOY_CMD}
+          kubectl rollout status deployment/\${APP} -n \${NS} --timeout=120s
+          kubectl get pods -l app=\${APP} -n \${NS}
+          READY=\$(kubectl get pods -l app=\${APP} -n \${NS} --no-headers | awk '{print \$2}' | grep -c '1/1\\|2/2\\|3/3')
+          if [ "\$READY" -eq 0 ]; then
+            echo "ERROR: No pods are Ready. Check pod logs:"
+            kubectl logs -l app=\${APP} -n \${NS} --tail=10
+            exit 1
+          fi
+          echo "Pod readiness check: \$READY pod(s) Ready"
+${SMOKE_TEST_STEP}
+EOF
+
+echo "Generated CI workflow at .github/workflows/ci.yml"
