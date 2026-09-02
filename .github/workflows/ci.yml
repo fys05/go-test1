@@ -153,7 +153,7 @@ jobs:
           echo "Smoke test through probed endpoint for ${DOMAIN}"
           echo "Testing endpoint: https://${INGRESS_ENDPOINT}/healthz"
           for i in $(seq 1 6); do
-            CODE=$(curl -s -o /dev/null -w "%{http_code}" -k --connect-timeout 10 -H "Host:${DOMAIN}" "https://${INGRESS_ENDPOINT}/healthz" || echo "000")
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" -k --connect-timeout 10 -H "Host:${DOMAIN}" "https://${INGRESS_ENDPOINT}/healthz")
             echo "  attempt $i: HTTP $CODE"
             if [ "$CODE" = "200" ] || [ "$CODE" = "302" ]; then
               echo "SMOKE TEST PASSED (HTTP $CODE)"
