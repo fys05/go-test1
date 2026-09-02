@@ -56,7 +56,7 @@ jobs:
       packages: write
     outputs:
       image: ${{ steps.lc.outputs.image }}
-      image_digest: ${{ steps.lc.outputs.image }}@${{ steps.build.outputs.digest }}
+      image_tag: ${{ steps.lc.outputs.image }}:${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
       - id: lc
@@ -99,8 +99,8 @@ jobs:
           IMAGE_DIGEST: ${{ needs.build-and-push.outputs.image_digest }}
         run: |
           set -eu
-          : "${K8S_EXPECTED_API_SERVER:?required}"; : "${K8S_EXPECTED_CA_SHA256:?required}"; : "${K8S_NAMESPACE:?required}"; : "${IMAGE_DIGEST:?required immutable digest}"
-          test "${IMAGE_DIGEST#*@sha256:}" != "${IMAGE_DIGEST}"
+          : "${K8S_EXPECTED_API_SERVER:?required}"; : "${K8S_EXPECTED_CA_SHA256:?required}"; : "${K8S_NAMESPACE:?required}"; : "${IMAGE_DIGEST:?required image tag}"
+          test "${IMAGE_DIGEST#*:}" != "${IMAGE_DIGEST}"
           mkdir -p ~/.kube
           echo "$CERT" | base64 -d > /tmp/k8s-cert.pem
           echo "$KEY" | base64 -d > /tmp/k8s-key.pem
@@ -123,12 +123,12 @@ jobs:
       - name: Deploy app
         env:
           NS: ${{ vars.K8S_NAMESPACE }}
-          IMG: ${{ needs.build-and-push.outputs.image_digest }}
+          IMG: ${{ needs.build-and-push.outputs.image_tag }}
           APP: ${{ vars.APP_NAME }}
           DOMAIN: ${{ vars.DOMAIN }}
         run: |
           set -eu
-          test "${IMG#*@sha256:}" != "${IMG}" && test -n "${NS}" && test -n "${APP}" && test -n "${DOMAIN}"
+          test "${IMG#*:}" != "${IMG}" && test -n "${NS}" && test -n "${APP}" && test -n "${DOMAIN}"
           sed -i "s|\${IMAGE_DIGEST}|${IMG}|g" k8s/app/deployment.yaml
           sed -i "s|\${K8S_NAMESPACE}|${NS}|g" k8s/app/*.yaml
           sed -i "s|\${APP_NAME}|${APP}|g" k8s/app/*.yaml
