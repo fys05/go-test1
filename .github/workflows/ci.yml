@@ -147,7 +147,7 @@ jobs:
       - name: Smoke test
         env:
           DOMAIN: ${{ vars.DOMAIN }}
-          INGRESS_ENDPOINT: ${{ vars.INGRESS_ENDPOINT }}
+          INGRESS_ENDPOINT: 115.231.236.252
           INGRESS_CA_CERT_B64: ${{ secrets.INGRESS_CA_CERT }}
         run: |
           : "${INGRESS_ENDPOINT:?required ingress endpoint}"; : "${INGRESS_CA_CERT_B64:?required base64 ingress CA certificate}"
