@@ -134,7 +134,7 @@ jobs:
           sed -i "s|\${APP_NAME}|${APP}|g" k8s/app/*.yaml
           sed -i "s|\${DOMAIN}|${DOMAIN}|g" k8s/app/*.yaml
           kubectl diff -f k8s/app/ || true
-          kubectl replace -f k8s/app/ --force
+          kubectl apply -f k8s/app/
           kubectl rollout status deployment/${APP} -n ${NS} --timeout=120s
           kubectl get pods -l app=${APP} -n ${NS}
           READY=$(kubectl get pods -l app=${APP} -n ${NS} --no-headers | awk '{print $2}' | grep -c '1/1\|2/2\|3/3')
