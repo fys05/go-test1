@@ -133,7 +133,7 @@ jobs:
           sed -i "s|\${K8S_NAMESPACE}|${NS}|g" k8s/app/*.yaml
           sed -i "s|\${APP_NAME}|${APP}|g" k8s/app/*.yaml
           sed -i "s|\${DOMAIN}|${DOMAIN}|g" k8s/app/*.yaml
-          kubectl diff --server-side -f k8s/app/
+          kubectl diff --server-side -f k8s/app/ || true
           kubectl apply --server-side --dry-run=server -f k8s/app/
           kubectl apply --server-side -f k8s/app/
           kubectl rollout status deployment/${APP} -n ${NS} --timeout=120s
