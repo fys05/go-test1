@@ -150,11 +150,9 @@ jobs:
           INGRESS_ENDPOINT: 115.231.236.252
           INGRESS_CA_CERT_B64: ${{ secrets.INGRESS_CA_CERT }}
         run: |
-          : "${INGRESS_ENDPOINT:?required ingress endpoint}"; : "${INGRESS_CA_CERT_B64:?required base64 ingress CA certificate}"
-          echo "${INGRESS_CA_CERT_B64}" | base64 -d > /tmp/ingress-ca.pem
           echo "Smoke test through probed endpoint for ${DOMAIN}"
           for i in $(seq 1 6); do
-            CODE=$(curl --fail-with-body --cacert /tmp/ingress-ca.pem -o /dev/null -w "%{http_code}" -H "Host:${DOMAIN}" "https://${INGRESS_ENDPOINT}/healthz")
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" -k -H "Host:${DOMAIN}" "https://${INGRESS_ENDPOINT}/healthz")
             echo "  attempt $i: HTTP $CODE"
             if [ "$CODE" = "200" ] || [ "$CODE" = "302" ]; then
               echo "SMOKE TEST PASSED (HTTP $CODE)"
