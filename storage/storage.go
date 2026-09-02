@@ -10,10 +10,10 @@ import (
 )
 
 var (
-	ErrNotFound       = errors.New("record not found")
-	ErrAlreadyExists  = errors.New("record already exists")
-	ErrNoCopiesAvail  = errors.New("no copies available for borrow")
-	ErrBookNotBorrowed= errors.New("book is not actively borrowed by user")
+	ErrNotFound        = errors.New("record not found")
+	ErrAlreadyExists   = errors.New("record already exists")
+	ErrNoCopiesAvail   = errors.New("no copies available for borrow")
+	ErrBookNotBorrowed = errors.New("book is not actively borrowed by user")
 )
 
 type Storage interface {
